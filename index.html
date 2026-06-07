@@ -2131,6 +2131,148 @@ if (currentStudent) {
 loadApiKey();
 
 renderBank();
+
+// ─── IMPORT CSV/XLSX ──────────────────────────────────────────────────────────
+let importedRows = [];
+
+function showImportModal() {
+  importedRows = [];
+  document.getElementById('import-preview').style.display = 'none';
+  document.getElementById('import-status').style.display = 'none';
+  document.getElementById('import-btn').disabled = true;
+  document.getElementById('import-file-input').value = '';
+  document.getElementById('import-modal').classList.add('show');
+}
+
+function closeImportModal() {
+  document.getElementById('import-modal').classList.remove('show');
+}
+
+// Gắn sự kiện cho nút chọn file
+document.getElementById('import-file-btn').addEventListener('click', function() {
+  document.getElementById('import-file-input').click();
+});
+
+document.getElementById('import-file-input').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+
+  if (ext === 'csv') {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: function(results) {
+        processImportData(results.data, file.name);
+      },
+      error: function() {
+        showImportStatus('❌ Không đọc được file CSV. Vui lòng kiểm tra lại định dạng.', 'error');
+      }
+    });
+  } else if (ext === 'xlsx' || ext === 'xls') {
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      try {
+        const wb = XLSX.read(ev.target.result, { type: 'binary' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        processImportData(data, file.name);
+      } catch(err) {
+        showImportStatus('❌ Không đọc được file XLSX. Vui lòng kiểm tra lại.', 'error');
+      }
+    };
+    reader.readAsBinaryString(file);
+  } else {
+    showImportStatus('❌ Chỉ hỗ trợ file CSV hoặc XLSX/XLS.', 'error');
+  }
+});
+
+function processImportData(data, filename) {
+  const required = ['level', 'question', 'correct'];
+  const missing = required.filter(col => !Object.keys(data[0] || {}).map(k => k.toLowerCase()).includes(col));
+
+  if (missing.length > 0) {
+    showImportStatus(`❌ File thiếu cột bắt buộc: <strong>${missing.join(', ')}</strong>`, 'error');
+    return;
+  }
+
+  // Normalize keys to lowercase
+  importedRows = data.map(row => {
+    const n = {};
+    Object.keys(row).forEach(k => { n[k.toLowerCase()] = row[k]; });
+    return n;
+  }).filter(r => r.question && r.level);
+
+  if (importedRows.length === 0) {
+    showImportStatus('⚠️ Không tìm thấy dòng dữ liệu hợp lệ trong file.', 'error');
+    return;
+  }
+
+  // Show preview
+  const tbody = document.getElementById('import-preview-body');
+  tbody.innerHTML = importedRows.slice(0, 5).map(r => `
+    <tr>
+      <td style="padding:5px;">${r.level || '—'}</td>
+      <td style="padding:5px;">${(r.question || '').substring(0, 60)}${r.question && r.question.length > 60 ? '…' : ''}</td>
+      <td style="padding:5px;">${r.correct || r.correct_answer || '—'}</td>
+    </tr>
+  `).join('');
+  document.getElementById('import-preview-count').textContent = importedRows.length;
+  document.getElementById('import-preview').style.display = 'block';
+  document.getElementById('import-btn').disabled = false;
+  showImportStatus(`✅ Đọc thành công <strong>${importedRows.length}</strong> câu hỏi từ <em>${filename}</em>. Bấm Import để thêm vào ngân hàng.`, 'ok');
+}
+
+function importQuestions() {
+  if (!importedRows.length) return;
+
+  let added = 0;
+  const validLevels = ['A1','A2','B1','B2','C1','C2'];
+  const validSkills = ['Vocabulary','Grammar','Reading','Writing','Listening'];
+
+  importedRows.forEach((r, i) => {
+    const level = (r.level || 'A1').toUpperCase().trim();
+    if (!validLevels.includes(level)) return;
+
+    const options = [];
+    if (r.optiona || r['option a'] || r.a) options.push('A. ' + (r.optiona || r['option a'] || r.a));
+    if (r.optionb || r['option b'] || r.b) options.push('B. ' + (r.optionb || r['option b'] || r.b));
+    if (r.optionc || r['option c'] || r.c) options.push('C. ' + (r.optionc || r['option c'] || r.c));
+    if (r.optiond || r['option d'] || r.d) options.push('D. ' + (r.optiond || r['option d'] || r.d));
+
+    const correct = (r.correct || r.correct_answer || 'A').toUpperCase().trim();
+    const skill = validSkills.includes(r.skill) ? r.skill : 'Reading';
+    const type = options.length >= 2 ? 'multiple_choice' : (r.type || 'short_answer');
+
+    const q = {
+      id: 'q_' + String(questionBank.length + added + 1).padStart(3, '0'),
+      level,
+      skill,
+      type,
+      question: r.question || '',
+      options,
+      correct_answer: correct,
+      explanation: r.explanation || '',
+      source_paragraph: r.source_paragraph || r.source || ''
+    };
+    questionBank.push(q);
+    added++;
+  });
+
+  save();
+  renderBank();
+  closeImportModal();
+  toast(`✅ Đã import ${added} câu hỏi vào ngân hàng!`);
+}
+
+function showImportStatus(msg, type) {
+  const el = document.getElementById('import-status');
+  el.style.display = 'block';
+  el.style.background = type === 'error' ? '#fff0f4' : '#eafff4';
+  el.style.borderLeft = '3px solid ' + (type === 'error' ? 'var(--accent)' : 'var(--green)');
+  el.style.color = type === 'error' ? '#c0392b' : '#155724';
+  el.innerHTML = msg;
+}
 </script>
 
 <!-- Main Application Logic -->
