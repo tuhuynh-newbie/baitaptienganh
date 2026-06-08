@@ -8,7 +8,24 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.4.21/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js"></script>
+<script>
+// Load SheetJS với fallback nếu CDN chính bị chặn
+(function() {
+  function tryLoad(urls, idx) {
+    if (idx >= urls.length) { console.error('SheetJS: all CDN failed'); return; }
+    var s = document.createElement('script');
+    s.src = urls[idx];
+    s.onload = function() { console.log('SheetJS loaded from', urls[idx]); };
+    s.onerror = function() { tryLoad(urls, idx + 1); };
+    document.head.appendChild(s);
+  }
+  tryLoad([
+    'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js',
+    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+    'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js'
+  ], 0);
+})();
+</script>
 <style>
   :root {
     --ink: #0f0e17;
@@ -2170,18 +2187,35 @@ document.getElementById('import-file-input').addEventListener('change', function
       }
     });
   } else if (ext === 'xlsx' || ext === 'xls') {
+    if (typeof XLSX === 'undefined') {
+      showImportStatus('❌ Thư viện đọc XLSX chưa load xong. Vui lòng đợi 3 giây rồi thử lại, hoặc kiểm tra kết nối mạng.', 'error');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = function(ev) {
       try {
-        const wb = XLSX.read(ev.target.result, { type: 'binary' });
+        const data8 = new Uint8Array(ev.target.result);
+        const wb = XLSX.read(data8, { type: 'array' });
+        if (!wb.SheetNames || wb.SheetNames.length === 0) {
+          showImportStatus('❌ File XLSX không có sheet nào. Vui lòng kiểm tra lại.', 'error');
+          return;
+        }
         const ws = wb.Sheets[wb.SheetNames[0]];
         const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        if (!data || data.length === 0) {
+          showImportStatus('❌ Sheet đầu tiên không có dữ liệu. Kiểm tra file XLSX có dữ liệu từ dòng 1 không.', 'error');
+          return;
+        }
         processImportData(data, file.name);
       } catch(err) {
-        showImportStatus('❌ Không đọc được file XLSX. Vui lòng kiểm tra lại.', 'error');
+        console.error('XLSX error:', err);
+        showImportStatus('❌ Lỗi đọc XLSX: <strong>' + (err.message || err) + '<\/strong>. Thử lưu lại file dưới dạng .xlsx mới nhất.', 'error');
       }
     };
-    reader.readAsBinaryString(file);
+    reader.onerror = function() {
+      showImportStatus('❌ Không thể đọc file. Kiểm tra file có bị hỏng không.', 'error');
+    };
+    reader.readAsArrayBuffer(file);
   } else {
     showImportStatus('❌ Chỉ hỗ trợ file CSV hoặc XLSX/XLS.', 'error');
   }
